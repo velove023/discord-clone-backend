@@ -17,15 +17,12 @@ const io = socketIo(server, {
 app.use(cors());
 app.use(express.json());
 
-// MongoDB Connection (ganti dengan connection string dari MongoDB Atlas)
+// MongoDB Connection
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://velove_db:P0o9p0o923@cluster0.wuntgzf.mongodb.net/?appName=Cluster0';
 
-mongoose.connect(MONGODB_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true
-})
-.then(() => console.log('MongoDB connected'))
-.catch(err => console.error('MongoDB connection error:', err));
+mongoose.connect(MONGODB_URI)
+  .then(() => console.log('MongoDB connected'))
+  .catch(err => console.error('MongoDB connection error:', err));
 
 // Schema untuk User
 const userSchema = new mongoose.Schema({
@@ -50,13 +47,26 @@ let onlineUsers = new Map();
 
 // REST API Routes
 app.get('/', (req, res) => {
-  res.json({ message: 'Discord Clone API Running' });
+  res.json({ 
+    message: 'Discord Clone API Running',
+    status: 'OK',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Health check
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'OK' });
 });
 
 // Register
 app.post('/api/register', async (req, res) => {
   try {
     const { username, password } = req.body;
+    
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password required' });
+    }
     
     const existingUser = await User.findOne({ username });
     if (existingUser) {
@@ -68,6 +78,7 @@ app.post('/api/register', async (req, res) => {
     
     res.json({ message: 'User registered successfully', username });
   } catch (error) {
+    console.error('Register error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -77,6 +88,10 @@ app.post('/api/login', async (req, res) => {
   try {
     const { username, password } = req.body;
     
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password required' });
+    }
+    
     const user = await User.findOne({ username, password });
     if (!user) {
       return res.status(401).json({ error: 'Invalid credentials' });
@@ -84,6 +99,7 @@ app.post('/api/login', async (req, res) => {
 
     res.json({ message: 'Login successful', username });
   } catch (error) {
+    console.error('Login error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -96,6 +112,7 @@ app.get('/api/messages/:channel', async (req, res) => {
       .limit(100);
     res.json(messages);
   } catch (error) {
+    console.error('Get messages error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -152,6 +169,6 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
 });
