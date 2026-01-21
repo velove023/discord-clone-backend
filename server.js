@@ -18,7 +18,7 @@ app.use(cors());
 app.use(express.json());
 
 // MongoDB Connection (ganti dengan connection string dari MongoDB Atlas)
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/discord-clone';
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://velove_db:P0o9p0o923@cluster0.wuntgzf.mongodb.net/?appName=Cluster0';
 
 mongoose.connect(MONGODB_URI, {
   useNewUrlParser: true,
