@@ -6,19 +6,36 @@ const mongoose = require('mongoose');
 
 const app = express();
 const server = http.createServer(app);
+
+// Socket.io dengan CORS fix
 const io = socketIo(server, {
   cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
+    origin: [
+      'https://discord-clone-frontend-seven.vercel.app',
+      'http://localhost:3000',
+      'https://discord-clone-frontend-gamma.vercel.app'
+    ],
+    methods: ["GET", "POST"],
+    credentials: true
   }
 });
 
-// Middleware
-app.use(cors());
+// CORS middleware - PENTING untuk fix error
+app.use(cors({
+  origin: [
+    'https://discord-clone-frontend-seven.vercel.app',
+    'http://localhost:3000',
+    'https://discord-clone-frontend-gamma.vercel.app'
+  ],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 app.use(express.json());
 
 // MongoDB Connection
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://velove_db:P0o9p0o923@cluster0.wuntgzf.mongodb.net/?appName=Cluster0';
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://velove_db:P0o9p0o923@cluster0.wuntgzf.mongodb.net/discord-clone?retryWrites=true&w=majority';
 
 mongoose.connect(MONGODB_URI)
   .then(() => console.log('MongoDB connected'))
