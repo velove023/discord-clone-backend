@@ -1,3 +1,15 @@
+require('dotenv').config();
+
+// Test logging
+console.log('=== ENVIRONMENT VARIABLES CHECK ===');
+console.log('MongoDB URI:', process.env.MONGODB_URI ? '✅ Loaded' : '❌ Not found');
+console.log('JWT Secret:', process.env.JWT_SECRET ? '✅ Loaded' : '❌ Not found');
+console.log('Cloudinary Name:', process.env.CLOUDINARY_CLOUD_NAME ? '✅ Loaded' : '❌ Not found');
+console.log('Cloudinary Key:', process.env.CLOUDINARY_API_KEY ? '✅ Loaded' : '❌ Not found');
+console.log('Cloudinary Secret:', process.env.CLOUDINARY_API_SECRET ? '✅ Loaded' : '❌ Not found');
+console.log('===================================\n');
+
+
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
