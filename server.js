@@ -24,24 +24,30 @@ const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const app = express();
 const server = http.createServer(app);
 
-// UPDATED: Allow all origins for CORS
+// FIXED: Socket.IO CORS with dynamic origin
 const io = socketIo(server, {
   cors: {
-    origin: "*",
+    origin: function(origin, callback) {
+      callback(null, origin || "*");
+    },
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     credentials: true
   }
 });
 
-// Middleware - UPDATED: Allow all origins
+// FIXED: Express CORS with dynamic origin to support credentials
 app.use(cors({
-  origin: "*",
+  origin: function(origin, callback) {
+    // Allow requests with no origin (mobile apps, curl, Postman)
+    if (!origin) return callback(null, true);
+    // Allow all origins
+    return callback(null, origin);
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-app.use(express.json());
 app.use(express.json());
 
 // Cloudinary Configuration
