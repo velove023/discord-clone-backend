@@ -9,7 +9,6 @@ console.log('Cloudinary Key:', process.env.CLOUDINARY_API_KEY ? '✅ Loaded' : '
 console.log('Cloudinary Secret:', process.env.CLOUDINARY_API_SECRET ? '✅ Loaded' : '❌ Not found');
 console.log('===================================\n');
 
-
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
@@ -24,31 +23,25 @@ const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const app = express();
 const server = http.createServer(app);
 
-// FIXED: Socket.IO CORS with dynamic origin
+// FIXED: Socket.IO CORS
 const io = socketIo(server, {
   cors: {
-    origin: function(origin, callback) {
-      callback(null, origin || "*");
-    },
+    origin: "*", // Allow all for now
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     credentials: true
   }
 });
 
-// FIXED: Express CORS with dynamic origin to support credentials
+// FIXED: Express CORS
 app.use(cors({
-  origin: function(origin, callback) {
-    // Allow requests with no origin (mobile apps, curl, Postman)
-    if (!origin) return callback(null, true);
-    // Allow all origins
-    return callback(null, origin);
-  },
+  origin: "*",
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // Cloudinary Configuration
 cloudinary.config({
@@ -206,7 +199,11 @@ app.get('/', (req, res) => {
 
 // Health check
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'OK' });
+  res.status(200).json({ 
+    status: 'OK',
+    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    uptime: process.uptime()
+  });
 });
 
 // ==================== AUTH ROUTES ====================
@@ -242,10 +239,29 @@ app.post('/api/register', async (req, res) => {
     });
     await user.save();
     
+    // Auto-login after register
+    const token = jwt.sign(
+      { 
+        id: user._id, 
+        username: user.username, 
+        role: user.role 
+      },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
     res.json({ 
       message: 'User registered successfully', 
-      username,
-      role 
+      token,
+      user: {
+        username: user.username,
+        email: user.email,
+        role: user.role,
+        avatar: user.avatar,
+        bio: user.bio,
+        status: user.status,
+        customStatus: user.customStatus
+      }
     });
   } catch (error) {
     console.error('Register error:', error);
@@ -340,13 +356,23 @@ app.put('/api/profile', authenticateToken, async (req, res) => {
   try {
     const { avatar, bio, status, customStatus } = req.body;
     
+    const updateData = {};
+    if (avatar !== undefined) updateData.avatar = avatar;
+    if (bio !== undefined) updateData.bio = bio;
+    if (status !== undefined) updateData.status = status;
+    if (customStatus !== undefined) updateData.customStatus = customStatus;
+    
     const user = await User.findByIdAndUpdate(
       req.user.id,
-      { avatar, bio, status, customStatus },
+      updateData,
       { new: true }
     ).select('-password');
 
-    // Broadcast profile update to all users
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Broadcast profile update
     io.emit('user-profile-updated', {
       username: user.username,
       avatar: user.avatar,
@@ -667,7 +693,25 @@ app.get('/api/dm', authenticateToken, async (req, res) => {
       participants: req.user.username
     }).sort({ lastMessage: -1 });
 
-    res.json(conversations);
+    // Add unread count and other user info
+    const enrichedConversations = await Promise.all(conversations.map(async conv => {
+      const otherUser = conv.participants.find(p => p !== req.user.username);
+      const unreadCount = conv.messages.filter(m => 
+        m.sender !== req.user.username && !m.read
+      ).length;
+      
+      const user = await User.findOne({ username: otherUser }).select('avatar status');
+      
+      return {
+        ...conv.toObject(),
+        otherUser,
+        unreadCount,
+        otherUserAvatar: user?.avatar,
+        otherUserStatus: user?.status
+      };
+    }));
+
+    res.json(enrichedConversations);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -691,6 +735,52 @@ app.get('/api/dm/:username', authenticateToken, async (req, res) => {
     }
 
     res.json(dm);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Send DM message
+app.post('/api/dm/:username', authenticateToken, async (req, res) => {
+  try {
+    const { message } = req.body;
+    const participants = [req.user.username, req.params.username].sort();
+    
+    let dm = await DirectMessage.findOne({
+      participants: { $all: participants }
+    });
+
+    if (!dm) {
+      dm = new DirectMessage({
+        participants,
+        messages: []
+      });
+    }
+
+    const newMsg = {
+      sender: req.user.username,
+      message,
+      timestamp: new Date(),
+      read: false
+    };
+
+    dm.messages.push(newMsg);
+    dm.lastMessage = new Date();
+    await dm.save();
+
+    // Broadcast to recipient if online
+    const recipientSocket = Array.from(onlineUsers.entries())
+      .find(([_, userData]) => userData.username === req.params.username)?.[0];
+    
+    if (recipientSocket) {
+      io.to(recipientSocket).emit('new-dm', {
+        from: req.user.username,
+        message: newMsg,
+        dmId: dm._id
+      });
+    }
+
+    res.json({ message: 'DM sent', dm: newMsg });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -859,6 +949,7 @@ io.on('connection', (socket) => {
           lastSeen: new Date()
         });
 
+        // Send updated user list
         io.emit('users-update', Array.from(onlineUsers.values()));
         console.log(`${username} joined`);
       });
@@ -873,12 +964,18 @@ io.on('connection', (socket) => {
     console.log(`User joined channel: ${channel}`);
   });
 
+  // Leave channel
+  socket.on('leave-channel', (channel) => {
+    socket.leave(channel);
+    console.log(`User left channel: ${channel}`);
+  });
+
   // Send message
   socket.on('send-message', async (data) => {
     try {
       const { channel, username, message, token, attachments, mentions } = data;
       
-      jwt.verify(token, JWT_SECRET, async (err) => {
+      jwt.verify(token, JWT_SECRET, async (err, decoded) => {
         if (err) {
           socket.emit('message-error', { error: 'Unauthorized' });
           return;
@@ -895,8 +992,9 @@ io.on('connection', (socket) => {
 
         io.to(channel).emit('new-message', {
           _id: newMessage._id,
-          username,
-          message,
+          channel: newMessage.channel,
+          username: newMessage.username,
+          message: newMessage.message,
           timestamp: newMessage.timestamp,
           attachments: newMessage.attachments,
           mentions: newMessage.mentions,
@@ -924,12 +1022,126 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Send DM
+  // Edit message
+  socket.on('edit-message', async (data) => {
+    try {
+      const { messageId, newMessage, token } = data;
+      
+      jwt.verify(token, JWT_SECRET, async (err, decoded) => {
+        if (err) {
+          socket.emit('message-error', { error: 'Unauthorized' });
+          return;
+        }
+
+        const msg = await Message.findById(messageId);
+        if (!msg) return;
+
+        if (msg.username !== decoded.username && decoded.role !== 'admin') {
+          socket.emit('message-error', { error: 'Not authorized' });
+          return;
+        }
+
+        msg.message = newMessage;
+        msg.edited = true;
+        msg.editedAt = new Date();
+        await msg.save();
+
+        io.to(msg.channel).emit('message-edited', {
+          messageId: msg._id,
+          message: msg.message,
+          edited: true,
+          editedAt: msg.editedAt
+        });
+      });
+    } catch (error) {
+      console.error('Error editing message:', error);
+    }
+  });
+
+  // Delete message
+  socket.on('delete-message', async (data) => {
+    try {
+      const { messageId, token } = data;
+      
+      jwt.verify(token, JWT_SECRET, async (err, decoded) => {
+        if (err) {
+          socket.emit('message-error', { error: 'Unauthorized' });
+          return;
+        }
+
+        const msg = await Message.findById(messageId);
+        if (!msg) return;
+
+        if (msg.username !== decoded.username && decoded.role !== 'admin' && decoded.role !== 'moderator') {
+          socket.emit('message-error', { error: 'Not authorized' });
+          return;
+        }
+
+        const channel = msg.channel;
+        await Message.findByIdAndDelete(messageId);
+
+        io.to(channel).emit('message-deleted', {
+          messageId
+        });
+      });
+    } catch (error) {
+      console.error('Error deleting message:', error);
+    }
+  });
+
+  // React to message
+  socket.on('react-message', async (data) => {
+    try {
+      const { messageId, emoji, token } = data;
+      
+      jwt.verify(token, JWT_SECRET, async (err, decoded) => {
+        if (err) {
+          socket.emit('message-error', { error: 'Unauthorized' });
+          return;
+        }
+
+        const msg = await Message.findById(messageId);
+        if (!msg) return;
+
+        const existingReaction = msg.reactions.find(r => r.emoji === emoji);
+        
+        if (existingReaction) {
+          if (existingReaction.users.includes(decoded.username)) {
+            // Remove reaction
+            existingReaction.users = existingReaction.users.filter(u => u !== decoded.username);
+            if (existingReaction.users.length === 0) {
+              msg.reactions = msg.reactions.filter(r => r.emoji !== emoji);
+            }
+          } else {
+            // Add user to reaction
+            existingReaction.users.push(decoded.username);
+          }
+        } else {
+          // New reaction
+          msg.reactions.push({
+            emoji,
+            users: [decoded.username]
+          });
+        }
+
+        await msg.save();
+
+        io.to(msg.channel).emit('reaction-updated', {
+          messageId: msg._id,
+          reactions: msg.reactions
+        });
+      });
+    } catch (error) {
+      console.error('Error reacting to message:', error);
+    }
+  });
+
+  // Send DM via socket
   socket.on('send-dm', async (data) => {
     try {
       const { to, from, message, token, attachments } = data;
       
-      jwt.verify(token, JWT_SECRET, async (err) => {
+      jwt.verify(token, JWT_SECRET, async (err, decoded) => {
         if (err) {
           socket.emit('message-error', { error: 'Unauthorized' });
           return;
@@ -983,7 +1195,10 @@ io.on('connection', (socket) => {
 
   // User typing
   socket.on('typing', (data) => {
-    socket.to(data.channel).emit('user-typing', data.username);
+    socket.to(data.channel).emit('user-typing', {
+      username: data.username,
+      channel: data.channel
+    });
   });
 
   // User typing in DM
@@ -992,7 +1207,10 @@ io.on('connection', (socket) => {
       .find(([_, userData]) => userData.username === data.to)?.[0];
     
     if (recipientSocket) {
-      io.to(recipientSocket).emit('user-typing-dm', data.from);
+      io.to(recipientSocket).emit('user-typing-dm', {
+        from: data.from,
+        to: data.to
+      });
     }
   });
 
