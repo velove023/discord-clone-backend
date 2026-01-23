@@ -24,30 +24,24 @@ const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const app = express();
 const server = http.createServer(app);
 
+// UPDATED: Allow all origins for CORS
 const io = socketIo(server, {
   cors: {
-    origin: [
-      'https://discord-clone-frontend-seven.vercel.app',
-      'http://localhost:3000',
-      'https://discord-clone-frontend-gamma.vercel.app'
-    ],
-    methods: ["GET", "POST"],
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     credentials: true
   }
 });
 
-// Middleware
+// Middleware - UPDATED: Allow all origins
 app.use(cors({
-  origin: [
-    'https://discord-clone-frontend-seven.vercel.app',
-    'http://localhost:3000',
-    'https://discord-clone-frontend-gamma.vercel.app'
-  ],
+  origin: "*",
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
+app.use(express.json());
 app.use(express.json());
 
 // Cloudinary Configuration
